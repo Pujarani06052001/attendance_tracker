@@ -1,60 +1,99 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import Attendance from '../schemas/AttendanceSchemas.js';
+import Class from '../schemas/ClassSchemas.js';  
 
 const router = express.Router();
+
+
 router.post('/add/:classId', async (req, res) => {
   const { students } = req.body; 
   const { classId } = req.params;
+
 
   const trimmedClassId = classId.trim();
 
   try {
     const attendanceDate = new Date().toISOString().split('T')[0];
 
+    // Fetch the list of all students in the class from the database
+    const classData = await Class.findById(trimmedClassId).select('students');
+    console.log(classData);
+    
+    if (!classData) {
+      return res.status(404).json({ message: 'Class not found' });
+    }
+    const allStudents = classData.students.map((student) => student.toString());
+
     let attendance = await Attendance.findOne({
       class: trimmedClassId,
       date: attendanceDate,
     });
 
-
-    const newStudents = students.map((studentId) => {
-      const existingStudent = attendance.students.find(
-        (student) => student.studentId === studentId
-      );
-
-
-      if (existingStudent) {
-        return null;
-      }
-
-      return {
-        studentId: studentId, 
-        status: 'present',
-      };
-      
-    });
-
-
     if (!attendance) {
+      const presentStudents = students.map((studentId) => ({
+        studentId,
+        status: 'present',
+      }));
+
+      const absentStudents = allStudents
+        .filter((studentId) => !students.includes(studentId))
+        .map((studentId) => ({
+          studentId,
+          status: 'absent',
+        }));
+
+      const allAttendance = [...presentStudents, ...absentStudents];
+
       attendance = new Attendance({
         class: trimmedClassId,
         date: attendanceDate,
-        students: [],
+        students: allAttendance,
       });
+
+      await attendance.save();
+
+      return res.status(201).json({
+        message: 'New attendance record created successfully',
+        attendance,
+      });
+    } else {
+      const newStudents = students.map((studentId) => {
+        const existingStudent = attendance.students.find(
+          (student) => student.studentId === studentId
+        );
+
+        if (existingStudent) {
+          return null;
+        }
+
+        return {
+          studentId: studentId,
+          status: 'present',
+        };
+      });
+
+      const absentStudents = allStudents
+        .filter(
+          (studentId) =>
+            !students.includes(studentId) &&
+            !attendance.students.some((s) => s.studentId === studentId)
+        )
+        .map((studentId) => ({
+          studentId,
+          status: 'absent',
+        }));
+
+      attendance.students.push(...newStudents.filter(Boolean), ...absentStudents);
+      await attendance.save();
+
+      res.status(201).json({ message: 'Attendance updated successfully', attendance });
     }
-
-
-
-    attendance.students.push(...newStudents.filter(Boolean));
-
-    await attendance.save();
-
-    res.status(201).json({ message: 'Attendance added successfully', attendance });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to add attendance', details: error });
+    res.status(500).json({ error: 'Failed to add attendance', details: error.message });
   }
 });
+
 
 
 router.get('/class/:classId', async (req, res) => {
